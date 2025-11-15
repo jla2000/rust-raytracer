@@ -46,7 +46,15 @@ async fn run() {
             compilation_options: Default::default(),
             buffers: &[],
         },
-        primitive: wgpu::PrimitiveState::default(),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleStrip,
+            strip_index_format: None,
+            front_face: wgpu::FrontFace::Ccw,
+            cull_mode: None,
+            unclipped_depth: false,
+            polygon_mode: wgpu::PolygonMode::Fill,
+            conservative: false,
+        },
         depth_stencil: None,
         multisample: wgpu::MultisampleState::default(),
         fragment: Some(wgpu::FragmentState {
@@ -70,7 +78,7 @@ async fn run() {
                 match event {
                     winit::event::WindowEvent::CloseRequested => active_loop.exit(),
                     winit::event::WindowEvent::RedrawRequested => {
-                        match render(&surface, &device, &queue) {
+                        match render(&surface, &device, &queue, &render_pipeline) {
                             Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
                                 let window_size = window.inner_size();
                                 surface_config.width = window_size.width;
@@ -92,6 +100,7 @@ fn render(
     surface: &wgpu::Surface,
     device: &wgpu::Device,
     queue: &wgpu::Queue,
+    render_pipeline: &wgpu::RenderPipeline,
 ) -> Result<(), wgpu::SurfaceError> {
     let output = surface.get_current_texture().unwrap();
     let view = output
@@ -100,18 +109,13 @@ fn render(
 
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
 
-    _ = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+    let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: Some("Render Pass"),
         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
             view: &view,
             resolve_target: None,
             ops: wgpu::Operations {
-                load: wgpu::LoadOp::Clear(wgpu::Color {
-                    r: 0.1,
-                    g: 0.2,
-                    b: 0.3,
-                    a: 1.0,
-                }),
+                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
                 store: wgpu::StoreOp::Store,
             },
             depth_slice: None,
@@ -120,10 +124,11 @@ fn render(
         occlusion_query_set: None,
         timestamp_writes: None,
     });
+    render_pass.set_pipeline(render_pipeline);
+    render_pass.draw(0..4, 0..1);
+    drop(render_pass);
 
-    // submit will accept anything that implements IntoIter
     queue.submit(std::iter::once(encoder.finish()));
-
     output.present();
 
     Ok(())

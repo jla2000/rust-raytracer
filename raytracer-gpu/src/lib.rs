@@ -1,7 +1,7 @@
 #![expect(unexpected_cfgs)]
 #![cfg_attr(target_arch = "spirv", no_std)]
 
-use spirv_std::glam::{Vec2, Vec4, vec2, vec4};
+use spirv_std::glam::{Vec2, Vec4, vec2};
 use spirv_std::spirv;
 
 #[spirv(vertex)]
@@ -15,6 +15,6 @@ pub fn main_vs(
 }
 
 #[spirv(fragment)]
-pub fn main_fs(output: &mut Vec4) {
-    *output = vec4(1.0, 0.0, 0.0, 1.0);
+pub fn main_fs(uv: Vec2, output: &mut Vec4) {
+    *output = uv.extend(0.0).extend(1.0);
 }
