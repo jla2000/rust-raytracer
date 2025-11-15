@@ -1,5 +1,135 @@
-const SHADER: &[u8] = include_bytes!(env!("raytracer_gpu.spv"));
+async fn run() {
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        backends: wgpu::Backends::VULKAN,
+        ..Default::default()
+    });
+
+    let event_loop = winit::event_loop::EventLoop::new().unwrap();
+    let window = event_loop
+        .create_window(winit::window::WindowAttributes::default())
+        .unwrap();
+
+    let surface = instance.create_surface(&window).unwrap();
+
+    let adapter = instance
+        .request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            force_fallback_adapter: false,
+            compatible_surface: Some(&surface),
+        })
+        .await
+        .unwrap();
+
+    let (device, queue) = adapter
+        .request_device(&wgpu::DeviceDescriptor::default())
+        .await
+        .unwrap();
+
+    let window_size = window.inner_size();
+    let mut surface_config = surface
+        .get_default_config(&adapter, window_size.width, window_size.height)
+        .unwrap();
+
+    surface.configure(&device, &surface_config);
+
+    let spirv_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        source: wgpu::util::make_spirv(include_bytes!(env!("raytracer_gpu.spv"))),
+        label: None,
+    });
+
+    let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: None,
+        layout: None,
+        vertex: wgpu::VertexState {
+            module: &spirv_shader,
+            entry_point: Some("main_vs"),
+            compilation_options: Default::default(),
+            buffers: &[],
+        },
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: &spirv_shader,
+            entry_point: Some("main_fs"),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: surface_config.format,
+                blend: Some(wgpu::BlendState::REPLACE),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        multiview: None,
+        cache: None,
+    });
+
+    let window = &window;
+    event_loop
+        .run(move |event, active_loop| {
+            if let winit::event::Event::WindowEvent { event, .. } = event {
+                match event {
+                    winit::event::WindowEvent::CloseRequested => active_loop.exit(),
+                    winit::event::WindowEvent::RedrawRequested => {
+                        match render(&surface, &device, &queue) {
+                            Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+                                let window_size = window.inner_size();
+                                surface_config.width = window_size.width;
+                                surface_config.height = window_size.height;
+                                surface.configure(&device, &surface_config);
+                            }
+                            Err(e) => log::error!("{e:?}"),
+                            Ok(()) => {}
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        })
+        .unwrap();
+}
+
+fn render(
+    surface: &wgpu::Surface,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+) -> Result<(), wgpu::SurfaceError> {
+    let output = surface.get_current_texture().unwrap();
+    let view = output
+        .texture
+        .create_view(&wgpu::TextureViewDescriptor::default());
+
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+
+    _ = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("Render Pass"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view: &view,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Clear(wgpu::Color {
+                    r: 0.1,
+                    g: 0.2,
+                    b: 0.3,
+                    a: 1.0,
+                }),
+                store: wgpu::StoreOp::Store,
+            },
+            depth_slice: None,
+        })],
+        depth_stencil_attachment: None,
+        occlusion_query_set: None,
+        timestamp_writes: None,
+    });
+
+    // submit will accept anything that implements IntoIter
+    queue.submit(std::iter::once(encoder.finish()));
+
+    output.present();
+
+    Ok(())
+}
 
 fn main() {
-    println!("Shader: {SHADER:?}");
+    env_logger::init();
+    pollster::block_on(run());
 }

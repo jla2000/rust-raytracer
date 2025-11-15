@@ -4,6 +4,11 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+log.workspace = true
+wgpu.workspace = true
+winit.workspace = true
+pollster.workspace = true
+env_logger.workspace = true
 
 [build-dependencies]
 spirv-builder.workspace = true

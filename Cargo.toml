@@ -3,6 +3,11 @@ resolver = "3"
 members = ["raytracer", "raytracer-gpu"]
 
 [workspace.dependencies]
+winit = "0.30.12"
+log = "0.4.28"
+env_logger = "0.11.8"
+wgpu = { version = "27.0.1", features = ["spirv"] }
+pollster = "0.4.0"
 spirv-std = { git = "https://github.com/jla2000/rust-gpu" }
 spirv-builder = { git = "https://github.com/jla2000/rust-gpu", default-features = false, features = [
   "use-installed-tools",

@@ -10,6 +10,8 @@
       pkgs = import nixpkgs {
         inherit system;
         overlays = [ (import rust-overlay) ];
+        config.allowUnfree = true;
+        config.microsoftVisualStudioLicenseAccepted = true;
       };
       toolchainFile = pkgs.fetchurl {
         url = "https://raw.githubusercontent.com/jla2000/rust-gpu/refs/heads/main/rust-toolchain.toml";
@@ -17,11 +19,14 @@
       };
     in
     {
-      devShells.${system}.default = pkgs.mkShell {
-        hardeningDisable = [ "fortify" ];
-        nativeBuildInputs = [
-          pkgs.spirv-tools
-          (pkgs.rust-bin.fromRustupToolchainFile toolchainFile)
+      devShells.${system}. default = pkgs.mkShell {
+        nativeBuildInputs = with pkgs; [
+          spirv-tools
+          (rust-bin.fromRustupToolchainFile toolchainFile)
+        ];
+        LD_LIBRARY_PATH = with pkgs; lib.makeLibraryPath [
+          vulkan-loader
+          libxkbcommon
         ];
       };
     };
