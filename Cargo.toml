@@ -1,0 +1,18 @@
+[workspace]
+resolver = "3"
+members = ["raytracer", "raytracer-gpu"]
+
+[workspace.dependencies]
+spirv-std = { git = "https://github.com/jla2000/rust-gpu" }
+spirv-builder = { git = "https://github.com/jla2000/rust-gpu", default-features = false, features = [
+  "use-installed-tools",
+] }
+
+# Compile build-dependencies in release mode with
+# the same settings as regular dependencies.
+[profile.release.build-override]
+opt-level = 3
+codegen-units = 16
+
+[profile.dev.build-override]
+opt-level = 3
