@@ -8,17 +8,22 @@ use vulkano::{
         AutoCommandBufferBuilder,
         allocator::{StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo},
     },
+    descriptor_set::{
+        DescriptorSet, DescriptorSetWithOffsets, WriteDescriptorSet,
+        allocator::{StandardDescriptorSetAllocator, StandardDescriptorSetAllocatorCreateInfo},
+    },
     device::{
         Device, DeviceCreateInfo, DeviceExtensions, DeviceFeatures, Queue, QueueCreateInfo,
         QueueFlags,
         physical::{PhysicalDevice, PhysicalDeviceType},
     },
     format::Format,
-    image::{Image, ImageUsage},
+    image::{Image, ImageUsage, view::ImageView},
     instance::{Instance, InstanceCreateInfo},
     pipeline::{
-        ComputePipeline, PipelineLayout, PipelineShaderStageCreateInfo,
-        compute::ComputePipelineCreateInfo, layout::PipelineDescriptorSetLayoutCreateInfo,
+        ComputePipeline, Pipeline, PipelineBindPoint, PipelineLayout,
+        PipelineShaderStageCreateInfo, compute::ComputePipelineCreateInfo,
+        layout::PipelineDescriptorSetLayoutCreateInfo,
     },
     shader::{ShaderModule, ShaderModuleCreateInfo, spirv::bytes_to_words},
     swapchain::{
@@ -76,6 +81,27 @@ fn main() {
         StandardCommandBufferAllocatorCreateInfo::default(),
     ));
 
+    let descriptor_set_allocator = Arc::new(StandardDescriptorSetAllocator::new(
+        device.clone(),
+        StandardDescriptorSetAllocatorCreateInfo::default(),
+    ));
+
+    let descriptor_set_layout = compute_pipeline.layout().set_layouts().first().unwrap();
+    let descriptor_sets: Vec<_> = images
+        .iter()
+        .map(|image| {
+            let image_view = ImageView::new_default(image.clone()).unwrap();
+
+            DescriptorSet::new(
+                descriptor_set_allocator.clone(),
+                descriptor_set_layout.clone(),
+                [WriteDescriptorSet::image_view(0, image_view)],
+                [],
+            )
+            .unwrap()
+        })
+        .collect();
+
     event_loop
         .run(|event, active_loop| {
             if let Event::WindowEvent { event, .. } = event {
@@ -93,9 +119,12 @@ fn main() {
                     }
                     WindowEvent::RedrawRequested => {
                         render(
+                            window.inner_size(),
                             &swapchain,
                             &device,
                             &queue,
+                            &compute_pipeline,
+                            &descriptor_sets,
                             command_buffer_allocator.clone(),
                         );
                     }
@@ -107,22 +136,43 @@ fn main() {
 }
 
 fn render(
+    window_size: PhysicalSize<u32>,
     swapchain: &Arc<Swapchain>,
     device: &Arc<Device>,
     queue: &Arc<Queue>,
+    compute_pipeline: &Arc<ComputePipeline>,
+    compute_descriptor_sets: &[Arc<DescriptorSet>],
     command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
 ) {
-    let command_buffer_builder = AutoCommandBufferBuilder::primary(
+    let (image_index, _suboptimal, acquire_future) =
+        acquire_next_image(swapchain.clone(), None).unwrap();
+
+    let mut command_buffer_builder = AutoCommandBufferBuilder::primary(
         command_buffer_allocator,
         queue.queue_family_index(),
         vulkano::command_buffer::CommandBufferUsage::OneTimeSubmit,
     )
     .unwrap();
 
-    let command_buffer = command_buffer_builder.build().unwrap();
+    unsafe {
+        command_buffer_builder
+            .bind_pipeline_compute(compute_pipeline.clone())
+            .unwrap()
+            .bind_descriptor_sets(
+                PipelineBindPoint::Compute,
+                compute_pipeline.layout().clone(),
+                0,
+                DescriptorSetWithOffsets::new(
+                    compute_descriptor_sets[image_index as usize].clone(),
+                    [],
+                ),
+            )
+            .unwrap()
+            .dispatch([window_size.width / 10, window_size.height / 10, 1])
+    }
+    .unwrap();
 
-    let (image_index, _suboptimal, acquire_future) =
-        acquire_next_image(swapchain.clone(), None).unwrap();
+    let command_buffer = command_buffer_builder.build().unwrap();
 
     let future = sync::now(device.clone())
         .join(acquire_future)
