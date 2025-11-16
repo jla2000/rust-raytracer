@@ -1,3 +1,5 @@
+#![expect(deprecated)]
+
 use std::sync::Arc;
 
 use vulkano::{
@@ -14,31 +16,34 @@ use vulkano::{
     format::Format,
     image::{Image, ImageUsage},
     instance::{Instance, InstanceCreateInfo},
+    pipeline::{
+        ComputePipeline, PipelineLayout, PipelineShaderStageCreateInfo,
+        compute::ComputePipelineCreateInfo, layout::PipelineDescriptorSetLayoutCreateInfo,
+    },
     shader::{ShaderModule, ShaderModuleCreateInfo, spirv::bytes_to_words},
     swapchain::{
-        self, AcquireNextImageInfo, PresentMode, Surface, Swapchain, SwapchainCreateInfo,
-        SwapchainPresentInfo, acquire_next_image,
+        PresentMode, Surface, Swapchain, SwapchainCreateInfo, SwapchainPresentInfo,
+        acquire_next_image,
     },
     sync::{self, GpuFuture},
 };
 use winit::{
     dpi::PhysicalSize,
-    event::{Event, WindowEvent},
+    event::{Event, KeyEvent, WindowEvent},
     event_loop::EventLoop,
+    keyboard::{KeyCode, PhysicalKey},
     window::WindowAttributes,
 };
 
 fn main() {
-    env_logger::init();
-
     let event_loop = EventLoop::new().unwrap();
-    let required_extensions = Surface::required_extensions(&event_loop).unwrap();
+    let instance_extensions = Surface::required_extensions(&event_loop).unwrap();
 
     let library = VulkanLibrary::new().unwrap();
     let instance = Instance::new(
         library,
         InstanceCreateInfo {
-            enabled_extensions: required_extensions,
+            enabled_extensions: instance_extensions,
             ..Default::default()
         },
     )
@@ -52,73 +57,114 @@ fn main() {
 
     let surface = Surface::from_window(instance.clone(), window.clone()).unwrap();
 
-    let required_device_extensions = DeviceExtensions {
+    let device_extensions = DeviceExtensions {
         khr_swapchain: true,
         ..Default::default()
     };
 
     let (physical_device, queue_family_index) =
-        select_physical_device(&instance, &surface, &required_device_extensions);
+        select_physical_device(&instance, &surface, &device_extensions);
 
     println!("Using GPU: {}", physical_device.properties().device_name);
 
-    let (device, queue) = select_device(
-        physical_device,
-        queue_family_index,
-        required_device_extensions,
-    );
-
-    let shader_words = bytes_to_words(include_bytes!(env!("raytracer_gpu.spv"))).unwrap();
-    let shader = unsafe {
-        ShaderModule::new(device.clone(), ShaderModuleCreateInfo::new(&shader_words)).unwrap()
-    };
-
+    let (device, queue) = select_device(physical_device, queue_family_index, device_extensions);
     let (swapchain, images) = create_swapchain(&device, surface.clone(), window.inner_size());
+    let compute_pipeline = create_compute_pipeline(&device);
 
-    let allocator = Arc::new(StandardCommandBufferAllocator::new(
+    let command_buffer_allocator = Arc::new(StandardCommandBufferAllocator::new(
         device.clone(),
         StandardCommandBufferAllocatorCreateInfo::default(),
     ));
-
-    let mut command_buffer_builder = AutoCommandBufferBuilder::primary(
-        allocator,
-        queue_family_index,
-        vulkano::command_buffer::CommandBufferUsage::MultipleSubmit,
-    )
-    .unwrap();
-
-    let command_buffer = command_buffer_builder.build().unwrap();
 
     event_loop
         .run(|event, active_loop| {
             if let Event::WindowEvent { event, .. } = event {
                 match event {
-                    WindowEvent::CloseRequested => active_loop.exit(),
+                    WindowEvent::CloseRequested
+                    | WindowEvent::KeyboardInput {
+                        event:
+                            KeyEvent {
+                                physical_key: PhysicalKey::Code(KeyCode::Escape),
+                                ..
+                            },
+                        ..
+                    } => {
+                        active_loop.exit();
+                    }
                     WindowEvent::RedrawRequested => {
-                        let (image_index, suboptimal, acquire_future) =
-                            acquire_next_image(swapchain.clone(), None).unwrap();
-
-                        let future = sync::now(device.clone())
-                            .join(acquire_future)
-                            .then_execute(queue.clone(), command_buffer.clone())
-                            .unwrap()
-                            .then_swapchain_present(
-                                queue.clone(),
-                                SwapchainPresentInfo::swapchain_image_index(
-                                    swapchain.clone(),
-                                    image_index,
-                                ),
-                            )
-                            .then_signal_fence_and_flush()
-                            .unwrap();
-
-                        future.wait(None).unwrap();
+                        render(
+                            &swapchain,
+                            &device,
+                            &queue,
+                            command_buffer_allocator.clone(),
+                        );
                     }
                     _ => {}
                 }
             }
         })
         .unwrap();
+}
+
+fn render(
+    swapchain: &Arc<Swapchain>,
+    device: &Arc<Device>,
+    queue: &Arc<Queue>,
+    command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
+) {
+    let command_buffer_builder = AutoCommandBufferBuilder::primary(
+        command_buffer_allocator,
+        queue.queue_family_index(),
+        vulkano::command_buffer::CommandBufferUsage::OneTimeSubmit,
+    )
+    .unwrap();
+
+    let command_buffer = command_buffer_builder.build().unwrap();
+
+    let (image_index, _suboptimal, acquire_future) =
+        acquire_next_image(swapchain.clone(), None).unwrap();
+
+    let future = sync::now(device.clone())
+        .join(acquire_future)
+        .then_execute(queue.clone(), command_buffer.clone())
+        .unwrap()
+        .then_swapchain_present(
+            queue.clone(),
+            SwapchainPresentInfo::swapchain_image_index(swapchain.clone(), image_index),
+        )
+        .then_signal_fence_and_flush()
+        .unwrap();
+
+    future.wait(None).unwrap();
+}
+
+fn create_compute_pipeline(device: &Arc<Device>) -> Arc<ComputePipeline> {
+    let shader_module = unsafe {
+        ShaderModule::new(
+            device.clone(),
+            ShaderModuleCreateInfo::new(
+                &bytes_to_words(include_bytes!(env!("raytracer_gpu.spv"))).unwrap(),
+            ),
+        )
+        .unwrap()
+    };
+
+    let compute_stage =
+        PipelineShaderStageCreateInfo::new(shader_module.entry_point("main_cs").unwrap());
+    let compute_layout = PipelineLayout::new(
+        device.clone(),
+        PipelineDescriptorSetLayoutCreateInfo::from_stages([&compute_stage])
+            .into_pipeline_layout_create_info(device.clone())
+            .unwrap(),
+    )
+    .unwrap();
+
+    ComputePipeline::new(
+        device.clone(),
+        None,
+        ComputePipelineCreateInfo::stage_layout(compute_stage, compute_layout),
+    )
+    .unwrap()
 }
 
 fn create_swapchain(
@@ -131,7 +177,7 @@ fn create_swapchain(
         surface,
         SwapchainCreateInfo {
             present_mode: PresentMode::Fifo,
-            image_usage: ImageUsage::COLOR_ATTACHMENT,
+            image_usage: ImageUsage::STORAGE,
             image_extent: [window_size.width, window_size.height],
             image_format: Format::R8G8B8A8_UNORM,
             min_image_count: 3,
@@ -144,7 +190,7 @@ fn create_swapchain(
 fn select_device(
     physical_device: Arc<PhysicalDevice>,
     queue_family_index: u32,
-    required_extensions: DeviceExtensions,
+    device_extensions: DeviceExtensions,
 ) -> (Arc<Device>, Arc<Queue>) {
     let (device, mut queues) = Device::new(
         physical_device,
@@ -153,7 +199,7 @@ fn select_device(
                 queue_family_index,
                 ..Default::default()
             }],
-            enabled_extensions: required_extensions,
+            enabled_extensions: device_extensions,
             enabled_features: DeviceFeatures {
                 vulkan_memory_model: true,
                 ..Default::default()

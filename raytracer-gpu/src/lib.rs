@@ -3,12 +3,12 @@
 
 use spirv_std::glam::{UVec2, UVec3, Vec3Swizzles, vec4};
 use spirv_std::image::StorageImage2d;
-use spirv_std::spirv;
+use spirv_std::{Image, spirv};
 
 #[spirv(compute(threads(10, 10)))]
 pub fn main_cs(
     #[spirv(global_invocation_id)] global_invocation_id: UVec3,
-    #[spirv(descriptor_set = 0, binding = 0)] output: &StorageImage2d,
+    #[spirv(descriptor_set = 0, binding = 0)] output: &Image!(2D, format = rgba8, sampled = false),
 ) {
     let output_size: UVec2 = output.query_size();
 
