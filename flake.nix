@@ -19,15 +19,26 @@
       };
     in
     {
-      devShells.${system}. default = pkgs.mkShell {
-        nativeBuildInputs = with pkgs; [
-          spirv-tools
-          (rust-bin.fromRustupToolchainFile toolchainFile)
-        ];
-        LD_LIBRARY_PATH = with pkgs; lib.makeLibraryPath [
-          vulkan-loader
-          libxkbcommon
-        ];
+      devShells.${system} = {
+        default = pkgs.mkShell {
+          nativeBuildInputs = with pkgs; [
+            spirv-tools
+            (rust-bin.fromRustupToolchainFile toolchainFile)
+          ];
+          LD_LIBRARY_PATH = with pkgs; lib.makeLibraryPath [
+            vulkan-loader
+            libxkbcommon
+          ];
+        };
+        windows = pkgs.pkgsCross.mingwW64.mkShell {
+          nativeBuildInputs = with pkgs; [
+            spirv-tools
+            ((rust-bin.fromRustupToolchainFile toolchainFile).override {
+              targets = [ "x86_64-pc-windows-gnu" ];
+            })
+          ];
+          CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUSTFLAGS = "-L native=${pkgs.pkgsCross.mingwW64.windows.pthreads}/lib";
+        };
       };
     };
 }
