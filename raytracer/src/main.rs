@@ -23,7 +23,10 @@ async fn run() {
         .unwrap();
 
     let (device, queue) = adapter
-        .request_device(&wgpu::DeviceDescriptor::default())
+        .request_device(&wgpu::DeviceDescriptor {
+            required_features: wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES,
+            ..Default::default()
+        })
         .await
         .unwrap();
 
@@ -177,7 +180,7 @@ fn render(
     let mut render_encoder =
         device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
     let mut render_pass = render_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-        label: Some("Render Pass"),
+        label: None,
         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
             view: &surface_view,
             resolve_target: None,
