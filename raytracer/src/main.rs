@@ -1,161 +1,118 @@
-#![expect(deprecated, reason = "New winit interface sucks")]
+use std::sync::Arc;
 
-async fn run() {
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-        backends: wgpu::Backends::VULKAN,
-        ..Default::default()
-    });
+use vulkano::{
+    VulkanLibrary,
+    command_buffer::{
+        AutoCommandBufferBuilder,
+        allocator::{StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo},
+    },
+    device::{
+        Device, DeviceCreateInfo, DeviceExtensions, DeviceFeatures, Queue, QueueCreateInfo,
+        QueueFlags,
+        physical::{PhysicalDevice, PhysicalDeviceType},
+    },
+    format::Format,
+    image::{Image, ImageUsage},
+    instance::{Instance, InstanceCreateInfo},
+    shader::{ShaderModule, ShaderModuleCreateInfo, spirv::bytes_to_words},
+    swapchain::{
+        self, AcquireNextImageInfo, PresentMode, Surface, Swapchain, SwapchainCreateInfo,
+        SwapchainPresentInfo, acquire_next_image,
+    },
+    sync::{self, GpuFuture},
+};
+use winit::{
+    dpi::PhysicalSize,
+    event::{Event, WindowEvent},
+    event_loop::EventLoop,
+    window::WindowAttributes,
+};
 
-    let event_loop = winit::event_loop::EventLoop::new().unwrap();
-    let window = event_loop
-        .create_window(winit::window::WindowAttributes::default())
-        .unwrap();
+fn main() {
+    env_logger::init();
 
-    let surface = instance.create_surface(&window).unwrap();
+    let event_loop = EventLoop::new().unwrap();
+    let required_extensions = Surface::required_extensions(&event_loop).unwrap();
 
-    let adapter = instance
-        .request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            force_fallback_adapter: false,
-            compatible_surface: Some(&surface),
-        })
-        .await
-        .unwrap();
-
-    let (device, queue) = adapter
-        .request_device(&wgpu::DeviceDescriptor {
-            required_features: wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES,
+    let library = VulkanLibrary::new().unwrap();
+    let instance = Instance::new(
+        library,
+        InstanceCreateInfo {
+            enabled_extensions: required_extensions,
             ..Default::default()
-        })
-        .await
-        .unwrap();
-
-    let window_size = window.inner_size();
-    let mut surface_config = surface
-        .get_default_config(&adapter, window_size.width, window_size.height)
-        .unwrap();
-
-    surface.configure(&device, &surface_config);
-
-    let spirv_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        source: wgpu::util::make_spirv(include_bytes!(env!("raytracer_gpu.spv"))),
-        label: None,
-    });
-
-    let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: None,
-        layout: None,
-        vertex: wgpu::VertexState {
-            module: &spirv_shader,
-            entry_point: Some("main_vs"),
-            compilation_options: Default::default(),
-            buffers: &[],
         },
-        primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleStrip,
-            strip_index_format: None,
-            front_face: wgpu::FrontFace::Ccw,
-            cull_mode: None,
-            unclipped_depth: false,
-            polygon_mode: wgpu::PolygonMode::Fill,
-            conservative: false,
-        },
-        depth_stencil: None,
-        multisample: wgpu::MultisampleState::default(),
-        fragment: Some(wgpu::FragmentState {
-            module: &spirv_shader,
-            entry_point: Some("main_fs"),
-            compilation_options: Default::default(),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: surface_config.format,
-                blend: Some(wgpu::BlendState::REPLACE),
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-        }),
-        multiview: None,
-        cache: None,
-    });
+    )
+    .unwrap();
 
-    let compute_texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: None,
-        size: wgpu::Extent3d {
-            width: 800,
-            height: 600,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba32Float,
-        usage: wgpu::TextureUsages::STORAGE_BINDING,
-        view_formats: &[wgpu::TextureFormat::Rgba32Float],
-    });
+    let window = Arc::new(
+        event_loop
+            .create_window(WindowAttributes::default())
+            .unwrap(),
+    );
 
-    let compute_texture_view = compute_texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let surface = Surface::from_window(instance.clone(), window.clone()).unwrap();
 
-    let compute_bind_group_layout =
-        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: None,
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::COMPUTE,
-                ty: wgpu::BindingType::StorageTexture {
-                    access: wgpu::StorageTextureAccess::ReadWrite,
-                    format: wgpu::TextureFormat::Rgba32Float,
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                },
-                count: None,
-            }],
-        });
+    let required_device_extensions = DeviceExtensions {
+        khr_swapchain: true,
+        ..Default::default()
+    };
 
-    let compute_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: None,
-        layout: &compute_bind_group_layout,
-        entries: &[wgpu::BindGroupEntry {
-            binding: 0,
-            resource: wgpu::BindingResource::TextureView(&compute_texture_view),
-        }],
-    });
+    let (physical_device, queue_family_index) =
+        select_physical_device(&instance, &surface, &required_device_extensions);
 
-    let compute_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: None,
-        bind_group_layouts: &[&compute_bind_group_layout],
-        push_constant_ranges: &[],
-    });
+    println!("Using GPU: {}", physical_device.properties().device_name);
 
-    let compute_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-        label: None,
-        layout: Some(&compute_pipeline_layout),
-        module: &spirv_shader,
-        entry_point: Some("main_cs"),
-        compilation_options: Default::default(),
-        cache: None,
-    });
+    let (device, queue) = select_device(
+        physical_device,
+        queue_family_index,
+        required_device_extensions,
+    );
 
-    let window = &window;
+    let shader_words = bytes_to_words(include_bytes!(env!("raytracer_gpu.spv"))).unwrap();
+    let shader = unsafe {
+        ShaderModule::new(device.clone(), ShaderModuleCreateInfo::new(&shader_words)).unwrap()
+    };
+
+    let (swapchain, images) = create_swapchain(&device, surface.clone(), window.inner_size());
+
+    let allocator = Arc::new(StandardCommandBufferAllocator::new(
+        device.clone(),
+        StandardCommandBufferAllocatorCreateInfo::default(),
+    ));
+
+    let mut command_buffer_builder = AutoCommandBufferBuilder::primary(
+        allocator,
+        queue_family_index,
+        vulkano::command_buffer::CommandBufferUsage::MultipleSubmit,
+    )
+    .unwrap();
+
+    let command_buffer = command_buffer_builder.build().unwrap();
+
     event_loop
-        .run(move |event, active_loop| {
-            if let winit::event::Event::WindowEvent { event, .. } = event {
+        .run(|event, active_loop| {
+            if let Event::WindowEvent { event, .. } = event {
                 match event {
-                    winit::event::WindowEvent::CloseRequested => active_loop.exit(),
-                    winit::event::WindowEvent::RedrawRequested => {
-                        match render(
-                            &surface,
-                            &device,
-                            &queue,
-                            &render_pipeline,
-                            &compute_pipeline,
-                            &compute_bind_group,
-                        ) {
-                            Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-                                let window_size = window.inner_size();
-                                surface_config.width = window_size.width;
-                                surface_config.height = window_size.height;
-                                surface.configure(&device, &surface_config);
-                            }
-                            Err(e) => log::error!("{e:?}"),
-                            Ok(()) => {}
-                        }
+                    WindowEvent::CloseRequested => active_loop.exit(),
+                    WindowEvent::RedrawRequested => {
+                        let (image_index, suboptimal, acquire_future) =
+                            acquire_next_image(swapchain.clone(), None).unwrap();
+
+                        let future = sync::now(device.clone())
+                            .join(acquire_future)
+                            .then_execute(queue.clone(), command_buffer.clone())
+                            .unwrap()
+                            .then_swapchain_present(
+                                queue.clone(),
+                                SwapchainPresentInfo::swapchain_image_index(
+                                    swapchain.clone(),
+                                    image_index,
+                                ),
+                            )
+                            .then_signal_fence_and_flush()
+                            .unwrap();
+
+                        future.wait(None).unwrap();
                     }
                     _ => {}
                 }
@@ -164,59 +121,75 @@ async fn run() {
         .unwrap();
 }
 
-fn render(
-    surface: &wgpu::Surface,
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    render_pipeline: &wgpu::RenderPipeline,
-    compute_pipeline: &wgpu::ComputePipeline,
-    compute_bind_group: &wgpu::BindGroup,
-) -> Result<(), wgpu::SurfaceError> {
-    let surface_texture = surface.get_current_texture().unwrap();
-    let surface_view = surface_texture
-        .texture
-        .create_view(&wgpu::TextureViewDescriptor::default());
-
-    let mut render_encoder =
-        device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-    let mut render_pass = render_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-        label: None,
-        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-            view: &surface_view,
-            resolve_target: None,
-            ops: wgpu::Operations {
-                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                store: wgpu::StoreOp::Store,
-            },
-            depth_slice: None,
-        })],
-        depth_stencil_attachment: None,
-        occlusion_query_set: None,
-        timestamp_writes: None,
-    });
-    render_pass.set_pipeline(render_pipeline);
-    render_pass.draw(0..4, 0..1);
-    drop(render_pass);
-
-    let mut compute_encoder =
-        device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-    let mut compute_pass =
-        compute_encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
-
-    compute_pass.set_bind_group(0, compute_bind_group, &[]);
-    compute_pass.set_pipeline(compute_pipeline);
-    compute_pass.dispatch_workgroups(800, 600, 1);
-    drop(compute_pass);
-
-    let command_buffers = [render_encoder.finish(), compute_encoder.finish()];
-
-    queue.submit(command_buffers);
-    surface_texture.present();
-
-    Ok(())
+fn create_swapchain(
+    device: &Arc<Device>,
+    surface: Arc<Surface>,
+    window_size: PhysicalSize<u32>,
+) -> (Arc<Swapchain>, Vec<Arc<Image>>) {
+    Swapchain::new(
+        device.clone(),
+        surface,
+        SwapchainCreateInfo {
+            present_mode: PresentMode::Fifo,
+            image_usage: ImageUsage::COLOR_ATTACHMENT,
+            image_extent: [window_size.width, window_size.height],
+            image_format: Format::R8G8B8A8_UNORM,
+            min_image_count: 3,
+            ..Default::default()
+        },
+    )
+    .expect("Failed to create swapchain")
 }
 
-fn main() {
-    env_logger::init();
-    pollster::block_on(run());
+fn select_device(
+    physical_device: Arc<PhysicalDevice>,
+    queue_family_index: u32,
+    required_extensions: DeviceExtensions,
+) -> (Arc<Device>, Arc<Queue>) {
+    let (device, mut queues) = Device::new(
+        physical_device,
+        DeviceCreateInfo {
+            queue_create_infos: vec![QueueCreateInfo {
+                queue_family_index,
+                ..Default::default()
+            }],
+            enabled_extensions: required_extensions,
+            enabled_features: DeviceFeatures {
+                vulkan_memory_model: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    (device, queues.next().unwrap())
+}
+
+fn select_physical_device(
+    instance: &Arc<Instance>,
+    surface: &Arc<Surface>,
+    device_extensions: &DeviceExtensions,
+) -> (Arc<PhysicalDevice>, u32) {
+    instance
+        .enumerate_physical_devices()
+        .expect("could not enumerate devices")
+        .filter(|p| p.supported_extensions().contains(device_extensions))
+        .filter_map(|p| {
+            p.queue_family_properties()
+                .iter()
+                .enumerate()
+                .position(|(i, q)| {
+                    q.queue_flags
+                        .contains(QueueFlags::GRAPHICS | QueueFlags::COMPUTE)
+                        && p.surface_support(i as u32, surface).unwrap_or(false)
+                })
+                .map(|q| (p, q as u32))
+        })
+        .min_by_key(|(p, _)| match p.properties().device_type {
+            PhysicalDeviceType::DiscreteGpu => 0,
+            PhysicalDeviceType::IntegratedGpu => 1,
+            _ => 2,
+        })
+        .expect("no device available")
 }

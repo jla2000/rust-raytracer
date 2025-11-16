@@ -26,6 +26,7 @@
             (rust-bin.fromRustupToolchainFile toolchainFile)
           ];
           LD_LIBRARY_PATH = with pkgs; lib.makeLibraryPath [
+            wayland
             vulkan-loader
             libxkbcommon
           ];
