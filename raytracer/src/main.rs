@@ -5,7 +5,7 @@ use std::sync::Arc;
 use vulkano::{
     VulkanLibrary,
     command_buffer::{
-        AutoCommandBufferBuilder,
+        AutoCommandBufferBuilder, CommandBuffer, PrimaryAutoCommandBuffer,
         allocator::{StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo},
     },
     descriptor_set::{
@@ -59,6 +59,7 @@ fn main() {
             .create_window(WindowAttributes::default())
             .unwrap(),
     );
+    let window_size = window.inner_size();
 
     let surface = Surface::from_window(instance.clone(), window.clone()).unwrap();
 
@@ -73,7 +74,7 @@ fn main() {
     println!("Using GPU: {}", physical_device.properties().device_name);
 
     let (device, queue) = select_device(physical_device, queue_family_index, device_extensions);
-    let (swapchain, images) = create_swapchain(&device, surface.clone(), window.inner_size());
+    let (swapchain, images) = create_swapchain(&device, surface.clone(), window_size);
     let compute_pipeline = create_compute_pipeline(&device);
 
     let command_buffer_allocator = Arc::new(StandardCommandBufferAllocator::new(
@@ -102,6 +103,40 @@ fn main() {
         })
         .collect();
 
+    let command_buffers: Vec<_> = descriptor_sets
+        .iter()
+        .map(|descriptor_set| {
+            let mut command_buffer_builder = AutoCommandBufferBuilder::primary(
+                command_buffer_allocator.clone(),
+                queue.queue_family_index(),
+                vulkano::command_buffer::CommandBufferUsage::MultipleSubmit,
+            )
+            .unwrap();
+
+            command_buffer_builder
+                .bind_pipeline_compute(compute_pipeline.clone())
+                .unwrap()
+                .bind_descriptor_sets(
+                    PipelineBindPoint::Compute,
+                    compute_pipeline.layout().clone(),
+                    0,
+                    DescriptorSetWithOffsets::new(descriptor_set.clone(), []),
+                )
+                .unwrap();
+
+            unsafe {
+                command_buffer_builder.dispatch([
+                    window_size.width / 10,
+                    window_size.height / 10,
+                    1,
+                ])
+            }
+            .unwrap();
+
+            command_buffer_builder.build().unwrap()
+        })
+        .collect();
+
     event_loop
         .run(|event, active_loop| {
             if let Event::WindowEvent { event, .. } = event {
@@ -118,15 +153,7 @@ fn main() {
                         active_loop.exit();
                     }
                     WindowEvent::RedrawRequested => {
-                        render(
-                            window.inner_size(),
-                            &swapchain,
-                            &device,
-                            &queue,
-                            &compute_pipeline,
-                            &descriptor_sets,
-                            command_buffer_allocator.clone(),
-                        );
+                        render(&swapchain, &device, &queue, &command_buffers);
                     }
                     _ => {}
                 }
@@ -136,47 +163,17 @@ fn main() {
 }
 
 fn render(
-    window_size: PhysicalSize<u32>,
     swapchain: &Arc<Swapchain>,
     device: &Arc<Device>,
     queue: &Arc<Queue>,
-    compute_pipeline: &Arc<ComputePipeline>,
-    compute_descriptor_sets: &[Arc<DescriptorSet>],
-    command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
+    command_buffers: &[Arc<PrimaryAutoCommandBuffer>],
 ) {
     let (image_index, _suboptimal, acquire_future) =
         acquire_next_image(swapchain.clone(), None).unwrap();
 
-    let mut command_buffer_builder = AutoCommandBufferBuilder::primary(
-        command_buffer_allocator,
-        queue.queue_family_index(),
-        vulkano::command_buffer::CommandBufferUsage::OneTimeSubmit,
-    )
-    .unwrap();
-
-    unsafe {
-        command_buffer_builder
-            .bind_pipeline_compute(compute_pipeline.clone())
-            .unwrap()
-            .bind_descriptor_sets(
-                PipelineBindPoint::Compute,
-                compute_pipeline.layout().clone(),
-                0,
-                DescriptorSetWithOffsets::new(
-                    compute_descriptor_sets[image_index as usize].clone(),
-                    [],
-                ),
-            )
-            .unwrap()
-            .dispatch([window_size.width / 10, window_size.height / 10, 1])
-    }
-    .unwrap();
-
-    let command_buffer = command_buffer_builder.build().unwrap();
-
     let future = sync::now(device.clone())
         .join(acquire_future)
-        .then_execute(queue.clone(), command_buffer.clone())
+        .then_execute(queue.clone(), command_buffers[image_index as usize].clone())
         .unwrap()
         .then_swapchain_present(
             queue.clone(),
