@@ -95,7 +95,7 @@ fn main() {
         ImageCreateInfo {
             image_type: ImageType::Dim2d,
             format: Format::R8G8B8A8_UNORM,
-            extent: [800, 600, 1],
+            extent: [window_size.width, window_size.height, 1],
             usage: ImageUsage::STORAGE | ImageUsage::TRANSFER_SRC,
             ..Default::default()
         },
