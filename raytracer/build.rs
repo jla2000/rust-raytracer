@@ -7,7 +7,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .extension("SPV_KHR_ray_tracing")
         .capability(Capability::ImageQuery)
         // .capability(Capability::RayQueryKHR)
-        // .capability(Capability::RayTracingKHR)
+        .capability(Capability::RayTracingKHR)
         .build()?;
     Ok(())
 }

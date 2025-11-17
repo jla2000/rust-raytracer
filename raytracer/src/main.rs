@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use smallvec::smallvec;
 use vulkano::{
     VulkanLibrary,
     command_buffer::{
@@ -23,8 +24,13 @@ use vulkano::{
     memory::allocator::{AllocationCreateInfo, StandardMemoryAllocator},
     pipeline::{
         ComputePipeline, Pipeline, PipelineBindPoint, PipelineLayout,
-        PipelineShaderStageCreateInfo, compute::ComputePipelineCreateInfo,
-        layout::PipelineDescriptorSetLayoutCreateInfo,
+        PipelineShaderStageCreateInfo,
+        compute::ComputePipelineCreateInfo,
+        layout::{PipelineDescriptorSetLayoutCreateInfo, PipelineLayoutCreateInfo},
+        ray_tracing::{
+            RayTracingPipeline, RayTracingPipelineCreateInfo, RayTracingShaderGroupCreateInfo,
+            ShaderBindingTable, ShaderBindingTableAddresses,
+        },
     },
     shader::{ShaderModule, ShaderModuleCreateInfo, spirv::bytes_to_words},
     swapchain::{
@@ -65,6 +71,7 @@ fn main() {
     let surface = Surface::from_window(instance.clone(), window.clone()).unwrap();
 
     let device_extensions = DeviceExtensions {
+        khr_buffer_device_address: true,
         khr_swapchain: true,
         khr_ray_query: true,
         khr_ray_tracing_pipeline: true,
@@ -79,7 +86,7 @@ fn main() {
 
     let (device, queue) = select_device(physical_device, queue_family_index, device_extensions);
     let (swapchain, swapchain_images) = create_swapchain(&device, surface.clone(), window_size);
-    let compute_pipeline = create_compute_pipeline(&device);
+    let raytracing_pipeline = create_raytracing_pipeline(&device);
 
     let memory_allocator = Arc::new(StandardMemoryAllocator::new_default(device.clone()));
 
@@ -93,7 +100,10 @@ fn main() {
         StandardDescriptorSetAllocatorCreateInfo::default(),
     ));
 
-    let compute_image = Image::new(
+    let shader_binding_table =
+        ShaderBindingTable::new(memory_allocator.clone(), &raytracing_pipeline).unwrap();
+
+    let raytracing_image = Image::new(
         memory_allocator,
         ImageCreateInfo {
             image_type: ImageType::Dim2d,
@@ -105,26 +115,28 @@ fn main() {
         AllocationCreateInfo::default(),
     )
     .unwrap();
-    let compute_image_view = ImageView::new_default(compute_image.clone()).unwrap();
+    let raytracing_image_view = ImageView::new_default(raytracing_image.clone()).unwrap();
 
-    let compute_descriptor_set_layout = compute_pipeline.layout().set_layouts().first().unwrap();
-    let compute_descriptor_set = DescriptorSet::new(
+    let raytracing_descriptor_set_layout =
+        raytracing_pipeline.layout().set_layouts().first().unwrap();
+    let raytracing_descriptor_set = DescriptorSet::new(
         descriptor_set_allocator.clone(),
-        compute_descriptor_set_layout.clone(),
-        [WriteDescriptorSet::image_view(0, compute_image_view)],
+        raytracing_descriptor_set_layout.clone(),
+        [WriteDescriptorSet::image_view(0, raytracing_image_view)],
         [],
     )
     .unwrap();
 
     let command_buffers: Vec<_> = swapchain_images
-        .iter()
+        .into_iter()
         .map(|swapchain_image| {
             record_command_buffer(
                 &queue,
                 swapchain_image,
-                &compute_image,
-                &compute_pipeline,
-                &compute_descriptor_set,
+                raytracing_image.clone(),
+                &raytracing_pipeline,
+                &raytracing_descriptor_set,
+                &shader_binding_table,
                 &command_buffer_allocator,
             )
         })
@@ -180,10 +192,11 @@ fn render(
 
 fn record_command_buffer(
     queue: &Arc<Queue>,
-    swapchain_image: &Arc<Image>,
-    compute_image: &Arc<Image>,
-    compute_pipeline: &Arc<ComputePipeline>,
-    compute_descriptor_set: &Arc<DescriptorSet>,
+    swapchain_image: Arc<Image>,
+    raytracing_image: Arc<Image>,
+    raytracing_pipeline: &Arc<RayTracingPipeline>,
+    raytracing_descriptor_set: &Arc<DescriptorSet>,
+    shader_binding_table: &ShaderBindingTable,
     command_buffer_allocator: &Arc<StandardCommandBufferAllocator>,
 ) -> Arc<PrimaryAutoCommandBuffer> {
     let mut command_buffer_builder = AutoCommandBufferBuilder::primary(
@@ -194,28 +207,31 @@ fn record_command_buffer(
     .unwrap();
 
     command_buffer_builder
-        .bind_pipeline_compute(compute_pipeline.clone())
+        .bind_pipeline_ray_tracing(raytracing_pipeline.clone())
         .unwrap()
         .bind_descriptor_sets(
-            PipelineBindPoint::Compute,
-            compute_pipeline.layout().clone(),
+            PipelineBindPoint::RayTracing,
+            raytracing_pipeline.layout().clone(),
             0,
-            DescriptorSetWithOffsets::new(compute_descriptor_set.clone(), []),
+            DescriptorSetWithOffsets::new(raytracing_descriptor_set.clone(), []),
         )
         .unwrap();
 
     unsafe {
-        command_buffer_builder.dispatch([
-            compute_image.extent()[0] / 10,
-            compute_image.extent()[1] / 10,
-            1,
-        ])
+        command_buffer_builder.trace_rays(
+            shader_binding_table.addresses().clone(),
+            [
+                raytracing_image.extent()[0],
+                raytracing_image.extent()[1],
+                1,
+            ],
+        )
     }
     .unwrap();
 
     command_buffer_builder
         .copy_image(CopyImageInfo::images(
-            compute_image.clone(),
+            raytracing_image.clone(),
             swapchain_image.clone(),
         ))
         .unwrap();
@@ -223,7 +239,7 @@ fn record_command_buffer(
     command_buffer_builder.build().unwrap()
 }
 
-fn create_compute_pipeline(device: &Arc<Device>) -> Arc<ComputePipeline> {
+fn create_raytracing_pipeline(device: &Arc<Device>) -> Arc<RayTracingPipeline> {
     let shader_module = unsafe {
         ShaderModule::new(
             device.clone(),
@@ -234,20 +250,27 @@ fn create_compute_pipeline(device: &Arc<Device>) -> Arc<ComputePipeline> {
         .unwrap()
     };
 
-    let compute_stage =
-        PipelineShaderStageCreateInfo::new(shader_module.entry_point("main_cs").unwrap());
-    let compute_layout = PipelineLayout::new(
+    let generate_rays_stage =
+        PipelineShaderStageCreateInfo::new(shader_module.entry_point("generate_rays").unwrap());
+
+    let raytracing_pipeline_layout = PipelineLayout::new(
         device.clone(),
-        PipelineDescriptorSetLayoutCreateInfo::from_stages([&compute_stage])
+        PipelineDescriptorSetLayoutCreateInfo::from_stages([&generate_rays_stage])
             .into_pipeline_layout_create_info(device.clone())
             .unwrap(),
     )
     .unwrap();
 
-    ComputePipeline::new(
+    RayTracingPipeline::new(
         device.clone(),
         None,
-        ComputePipelineCreateInfo::stage_layout(compute_stage, compute_layout),
+        RayTracingPipelineCreateInfo {
+            stages: smallvec![PipelineShaderStageCreateInfo::new(
+                shader_module.entry_point("generate_rays").unwrap()
+            ),],
+            groups: smallvec![RayTracingShaderGroupCreateInfo::General { general_shader: 0 },],
+            ..RayTracingPipelineCreateInfo::layout(raytracing_pipeline_layout)
+        },
     )
     .unwrap()
 }
@@ -300,6 +323,8 @@ fn select_device(
             enabled_extensions: device_extensions,
             enabled_features: DeviceFeatures {
                 vulkan_memory_model: true,
+                ray_tracing_pipeline: true,
+                buffer_device_address: true,
                 ..Default::default()
             },
             ..Default::default()
@@ -318,22 +343,32 @@ fn select_physical_device(
     instance
         .enumerate_physical_devices()
         .expect("could not enumerate devices")
-        .filter(|p| p.supported_extensions().contains(device_extensions))
-        .filter_map(|p| {
-            p.queue_family_properties()
+        .filter(|physical_device| {
+            physical_device
+                .supported_extensions()
+                .contains(device_extensions)
+        })
+        .filter_map(|physical_device| {
+            physical_device
+                .queue_family_properties()
                 .iter()
                 .enumerate()
-                .position(|(i, q)| {
-                    q.queue_flags
+                .position(|(queue_family_index, queue)| {
+                    queue
+                        .queue_flags
                         .contains(QueueFlags::GRAPHICS | QueueFlags::COMPUTE)
-                        && p.surface_support(i as u32, surface).unwrap_or(false)
+                        && physical_device
+                            .surface_support(queue_family_index as u32, surface)
+                            .unwrap_or(false)
                 })
-                .map(|q| (p, q as u32))
+                .map(|q| (physical_device, q as u32))
         })
-        .min_by_key(|(p, _)| match p.properties().device_type {
-            PhysicalDeviceType::DiscreteGpu => 0,
-            PhysicalDeviceType::IntegratedGpu => 1,
-            _ => 2,
-        })
+        .min_by_key(
+            |(physical_device, _)| match physical_device.properties().device_type {
+                PhysicalDeviceType::DiscreteGpu => 0,
+                PhysicalDeviceType::IntegratedGpu => 1,
+                _ => 2,
+            },
+        )
         .expect("no device available")
 }

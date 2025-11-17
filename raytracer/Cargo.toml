@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 winit.workspace = true
 vulkano.workspace = true
+smallvec.workspace = true
 
 [build-dependencies]
 spirv-builder.workspace = true

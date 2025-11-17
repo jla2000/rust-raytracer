@@ -1498,6 +1498,7 @@ dependencies = [
 name = "raytracer"
 version = "0.1.0"
 dependencies = [
+ "smallvec",
  "spirv-builder",
  "vulkano",
  "winit",

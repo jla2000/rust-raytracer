@@ -5,6 +5,7 @@ members = ["raytracer", "raytracer-gpu"]
 [workspace.dependencies]
 winit = "0.30.12"
 vulkano = "0.35.2"
+smallvec = "1.15.1"
 spirv-std = { git = "https://github.com/jla2000/rust-gpu" }
 spirv-builder = { git = "https://github.com/jla2000/rust-gpu", default-features = false, features = [
   "use-installed-tools",
