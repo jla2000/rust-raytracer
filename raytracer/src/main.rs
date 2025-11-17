@@ -5,7 +5,7 @@ use std::sync::Arc;
 use vulkano::{
     VulkanLibrary,
     command_buffer::{
-        AutoCommandBufferBuilder, CommandBuffer, PrimaryAutoCommandBuffer,
+        AutoCommandBufferBuilder, CopyImageInfo, PrimaryAutoCommandBuffer,
         allocator::{StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo},
     },
     descriptor_set::{
@@ -18,8 +18,9 @@ use vulkano::{
         physical::{PhysicalDevice, PhysicalDeviceType},
     },
     format::Format,
-    image::{Image, ImageUsage, view::ImageView},
+    image::{Image, ImageCreateInfo, ImageType, ImageUsage, view::ImageView},
     instance::{Instance, InstanceCreateInfo},
+    memory::allocator::{AllocationCreateInfo, StandardMemoryAllocator},
     pipeline::{
         ComputePipeline, Pipeline, PipelineBindPoint, PipelineLayout,
         PipelineShaderStageCreateInfo, compute::ComputePipelineCreateInfo,
@@ -27,7 +28,7 @@ use vulkano::{
     },
     shader::{ShaderModule, ShaderModuleCreateInfo, spirv::bytes_to_words},
     swapchain::{
-        PresentMode, Surface, Swapchain, SwapchainCreateInfo, SwapchainPresentInfo,
+        PresentMode, Surface, SurfaceInfo, Swapchain, SwapchainCreateInfo, SwapchainPresentInfo,
         acquire_next_image,
     },
     sync::{self, GpuFuture},
@@ -77,6 +78,8 @@ fn main() {
     let (swapchain, images) = create_swapchain(&device, surface.clone(), window_size);
     let compute_pipeline = create_compute_pipeline(&device);
 
+    let memory_allocator = Arc::new(StandardMemoryAllocator::new_default(device.clone()));
+
     let command_buffer_allocator = Arc::new(StandardCommandBufferAllocator::new(
         device.clone(),
         StandardCommandBufferAllocatorCreateInfo::default(),
@@ -87,25 +90,32 @@ fn main() {
         StandardDescriptorSetAllocatorCreateInfo::default(),
     ));
 
+    let compute_image = Image::new(
+        memory_allocator,
+        ImageCreateInfo {
+            image_type: ImageType::Dim2d,
+            format: Format::R8G8B8A8_UNORM,
+            extent: [800, 600, 1],
+            usage: ImageUsage::STORAGE | ImageUsage::TRANSFER_SRC,
+            ..Default::default()
+        },
+        AllocationCreateInfo::default(),
+    )
+    .unwrap();
+    let compute_image_view = ImageView::new_default(compute_image.clone()).unwrap();
+
     let descriptor_set_layout = compute_pipeline.layout().set_layouts().first().unwrap();
-    let descriptor_sets: Vec<_> = images
+    let descriptor_set = DescriptorSet::new(
+        descriptor_set_allocator.clone(),
+        descriptor_set_layout.clone(),
+        [WriteDescriptorSet::image_view(0, compute_image_view)],
+        [],
+    )
+    .unwrap();
+
+    let command_buffers: Vec<_> = images
         .iter()
         .map(|image| {
-            let image_view = ImageView::new_default(image.clone()).unwrap();
-
-            DescriptorSet::new(
-                descriptor_set_allocator.clone(),
-                descriptor_set_layout.clone(),
-                [WriteDescriptorSet::image_view(0, image_view)],
-                [],
-            )
-            .unwrap()
-        })
-        .collect();
-
-    let command_buffers: Vec<_> = descriptor_sets
-        .iter()
-        .map(|descriptor_set| {
             let mut command_buffer_builder = AutoCommandBufferBuilder::primary(
                 command_buffer_allocator.clone(),
                 queue.queue_family_index(),
@@ -132,6 +142,10 @@ fn main() {
                 ])
             }
             .unwrap();
+
+            command_buffer_builder
+                .copy_image(CopyImageInfo::images(compute_image.clone(), image.clone()))
+                .unwrap();
 
             command_buffer_builder.build().unwrap()
         })
@@ -219,15 +233,28 @@ fn create_swapchain(
     surface: Arc<Surface>,
     window_size: PhysicalSize<u32>,
 ) -> (Arc<Swapchain>, Vec<Arc<Image>>) {
+    let surface_caps = device
+        .physical_device()
+        .surface_capabilities(&surface, Default::default())
+        .unwrap();
+
+    let surface_formats = device
+        .physical_device()
+        .surface_formats(&surface, SurfaceInfo::default())
+        .unwrap();
+
+    let (image_format, image_color_space) = surface_formats.first().copied().unwrap();
+
     Swapchain::new(
         device.clone(),
         surface,
         SwapchainCreateInfo {
             present_mode: PresentMode::Fifo,
-            image_usage: ImageUsage::STORAGE,
+            image_usage: ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSFER_DST,
             image_extent: [window_size.width, window_size.height],
-            image_format: Format::R8G8B8A8_UNORM,
-            min_image_count: 3,
+            image_format,
+            image_color_space,
+            min_image_count: surface_caps.min_image_count + 1,
             ..Default::default()
         },
     )
