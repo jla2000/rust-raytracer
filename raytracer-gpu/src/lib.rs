@@ -12,7 +12,7 @@ pub struct PushConstants {
 
 #[spirv(compute(threads(10, 10)))]
 pub fn main_cs(
-    #[spirv(push_constant)] push_constants: &PushConstants,
+    // #[spirv(push_constant)] push_constants: &PushConstants,
     #[spirv(global_invocation_id)] global_invocation_id: UVec3,
     #[spirv(descriptor_set = 0, binding = 0)] output: &Image!(2D, format = rgba8, sampled = false),
 ) {

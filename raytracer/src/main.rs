@@ -66,6 +66,9 @@ fn main() {
 
     let device_extensions = DeviceExtensions {
         khr_swapchain: true,
+        khr_ray_query: true,
+        khr_ray_tracing_pipeline: true,
+        khr_acceleration_structure: true,
         ..Default::default()
     };
 
@@ -75,7 +78,7 @@ fn main() {
     println!("Using GPU: {}", physical_device.properties().device_name);
 
     let (device, queue) = select_device(physical_device, queue_family_index, device_extensions);
-    let (swapchain, images) = create_swapchain(&device, surface.clone(), window_size);
+    let (swapchain, swapchain_images) = create_swapchain(&device, surface.clone(), window_size);
     let compute_pipeline = create_compute_pipeline(&device);
 
     let memory_allocator = Arc::new(StandardMemoryAllocator::new_default(device.clone()));
@@ -104,50 +107,26 @@ fn main() {
     .unwrap();
     let compute_image_view = ImageView::new_default(compute_image.clone()).unwrap();
 
-    let descriptor_set_layout = compute_pipeline.layout().set_layouts().first().unwrap();
-    let descriptor_set = DescriptorSet::new(
+    let compute_descriptor_set_layout = compute_pipeline.layout().set_layouts().first().unwrap();
+    let compute_descriptor_set = DescriptorSet::new(
         descriptor_set_allocator.clone(),
-        descriptor_set_layout.clone(),
+        compute_descriptor_set_layout.clone(),
         [WriteDescriptorSet::image_view(0, compute_image_view)],
         [],
     )
     .unwrap();
 
-    let command_buffers: Vec<_> = images
+    let command_buffers: Vec<_> = swapchain_images
         .iter()
-        .map(|image| {
-            let mut command_buffer_builder = AutoCommandBufferBuilder::primary(
-                command_buffer_allocator.clone(),
-                queue.queue_family_index(),
-                vulkano::command_buffer::CommandBufferUsage::MultipleSubmit,
+        .map(|swapchain_image| {
+            record_command_buffer(
+                &queue,
+                swapchain_image,
+                &compute_image,
+                &compute_pipeline,
+                &compute_descriptor_set,
+                &command_buffer_allocator,
             )
-            .unwrap();
-
-            command_buffer_builder
-                .bind_pipeline_compute(compute_pipeline.clone())
-                .unwrap()
-                .bind_descriptor_sets(
-                    PipelineBindPoint::Compute,
-                    compute_pipeline.layout().clone(),
-                    0,
-                    DescriptorSetWithOffsets::new(descriptor_set.clone(), []),
-                )
-                .unwrap();
-
-            unsafe {
-                command_buffer_builder.dispatch([
-                    window_size.width / 10,
-                    window_size.height / 10,
-                    1,
-                ])
-            }
-            .unwrap();
-
-            command_buffer_builder
-                .copy_image(CopyImageInfo::images(compute_image.clone(), image.clone()))
-                .unwrap();
-
-            command_buffer_builder.build().unwrap()
         })
         .collect();
 
@@ -197,6 +176,51 @@ fn render(
         .unwrap();
 
     future.wait(None).unwrap();
+}
+
+fn record_command_buffer(
+    queue: &Arc<Queue>,
+    swapchain_image: &Arc<Image>,
+    compute_image: &Arc<Image>,
+    compute_pipeline: &Arc<ComputePipeline>,
+    compute_descriptor_set: &Arc<DescriptorSet>,
+    command_buffer_allocator: &Arc<StandardCommandBufferAllocator>,
+) -> Arc<PrimaryAutoCommandBuffer> {
+    let mut command_buffer_builder = AutoCommandBufferBuilder::primary(
+        command_buffer_allocator.clone(),
+        queue.queue_family_index(),
+        vulkano::command_buffer::CommandBufferUsage::MultipleSubmit,
+    )
+    .unwrap();
+
+    command_buffer_builder
+        .bind_pipeline_compute(compute_pipeline.clone())
+        .unwrap()
+        .bind_descriptor_sets(
+            PipelineBindPoint::Compute,
+            compute_pipeline.layout().clone(),
+            0,
+            DescriptorSetWithOffsets::new(compute_descriptor_set.clone(), []),
+        )
+        .unwrap();
+
+    unsafe {
+        command_buffer_builder.dispatch([
+            compute_image.extent()[0] / 10,
+            compute_image.extent()[1] / 10,
+            1,
+        ])
+    }
+    .unwrap();
+
+    command_buffer_builder
+        .copy_image(CopyImageInfo::images(
+            compute_image.clone(),
+            swapchain_image.clone(),
+        ))
+        .unwrap();
+
+    command_buffer_builder.build().unwrap()
 }
 
 fn create_compute_pipeline(device: &Arc<Device>) -> Arc<ComputePipeline> {
