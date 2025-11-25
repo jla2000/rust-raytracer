@@ -263,10 +263,19 @@ fn create_raytracing_pipeline(device: &Arc<Device>) -> Arc<RayTracingPipeline> {
         device.clone(),
         None,
         RayTracingPipelineCreateInfo {
-            stages: smallvec![PipelineShaderStageCreateInfo::new(
-                shader_module.entry_point("generate_rays").unwrap()
-            ),],
-            groups: smallvec![RayTracingShaderGroupCreateInfo::General { general_shader: 0 },],
+            stages: smallvec![
+                PipelineShaderStageCreateInfo::new(
+                    shader_module.entry_point("generate_rays").unwrap()
+                ),
+                PipelineShaderStageCreateInfo::new(shader_module.entry_point("ray_miss").unwrap()),
+                PipelineShaderStageCreateInfo::new(shader_module.entry_point("ray_hit").unwrap()),
+            ],
+            groups: smallvec![
+                // ray generation
+                RayTracingShaderGroupCreateInfo::General { general_shader: 0 },
+                // miss
+                RayTracingShaderGroupCreateInfo::General { general_shader: 1 },
+            ],
             ..RayTracingPipelineCreateInfo::layout(raytracing_pipeline_layout)
         },
     )

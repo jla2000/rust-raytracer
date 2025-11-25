@@ -1,7 +1,7 @@
 #![expect(unexpected_cfgs)]
 #![cfg_attr(target_arch = "spirv", no_std)]
 
-use spirv_std::glam::{UVec3, Vec3Swizzles, Vec4};
+use spirv_std::glam::{UVec3, Vec3Swizzles, Vec4, vec4};
 use spirv_std::{Image, spirv};
 
 #[spirv(ray_generation)]
@@ -21,4 +21,14 @@ pub fn generate_rays(
             ),
         )
     };
+}
+
+#[spirv(closest_hit)]
+pub fn ray_hit(#[spirv(ray_payload)] payload: &mut Vec4) {
+    *payload = vec4(0.0, 1.0, 0.0, 1.0);
+}
+
+#[spirv(miss)]
+pub fn ray_miss(#[spirv(ray_payload)] payload: &mut Vec4) {
+    *payload = vec4(1.0, 0.0, 0.0, 1.0);
 }
