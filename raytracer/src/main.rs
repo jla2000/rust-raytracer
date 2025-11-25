@@ -23,13 +23,11 @@ use vulkano::{
     instance::{Instance, InstanceCreateInfo},
     memory::allocator::{AllocationCreateInfo, StandardMemoryAllocator},
     pipeline::{
-        ComputePipeline, Pipeline, PipelineBindPoint, PipelineLayout,
-        PipelineShaderStageCreateInfo,
-        compute::ComputePipelineCreateInfo,
-        layout::{PipelineDescriptorSetLayoutCreateInfo, PipelineLayoutCreateInfo},
+        Pipeline, PipelineBindPoint, PipelineLayout, PipelineShaderStageCreateInfo,
+        layout::PipelineDescriptorSetLayoutCreateInfo,
         ray_tracing::{
             RayTracingPipeline, RayTracingPipelineCreateInfo, RayTracingShaderGroupCreateInfo,
-            ShaderBindingTable, ShaderBindingTableAddresses,
+            ShaderBindingTable,
         },
     },
     shader::{ShaderModule, ShaderModuleCreateInfo, spirv::bytes_to_words},
@@ -63,7 +61,7 @@ fn main() {
 
     let window = Arc::new(
         event_loop
-            .create_window(WindowAttributes::default())
+            .create_window(WindowAttributes::default().with_resizable(false))
             .unwrap(),
     );
     let window_size = window.inner_size();
