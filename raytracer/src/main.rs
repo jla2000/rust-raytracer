@@ -1,8 +1,5 @@
 #![expect(deprecated, reason = "New winit interface sucks")]
 
-use wgpu::SurfaceConfiguration;
-use winit::platform::x11::EventLoopBuilderExtX11;
-
 struct Backend<'a> {
     surface: wgpu::Surface<'a>,
     surface_config: wgpu::SurfaceConfiguration,
@@ -62,6 +59,8 @@ impl<'a> Backend<'a> {
 }
 
 fn main() {
+    use winit::platform::x11::EventLoopBuilderExtX11;
+
     env_logger::init();
 
     let event_loop = winit::event_loop::EventLoop::builder()
