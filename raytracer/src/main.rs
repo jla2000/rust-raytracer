@@ -1,5 +1,9 @@
 #![expect(deprecated, reason = "New winit interface sucks")]
 
+use std::time::{Duration, Instant};
+
+use wgpu::BlasGeometrySizeDescriptors;
+
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().filter_or("RUST_LOG", "error")).init();
 
@@ -15,14 +19,12 @@ fn main() {
     #[cfg(target_os = "windows")]
     let event_loop = winit::event_loop::EventLoop::new().unwrap();
 
-    event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
-
     let window = event_loop
         .create_window(winit::window::WindowAttributes::default())
         .unwrap();
 
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-        backends: wgpu::Backends::PRIMARY,
+        backends: wgpu::Backends::all(),
         ..Default::default()
     });
 
@@ -36,13 +38,21 @@ fn main() {
     .unwrap();
 
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        required_features: wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES,
+        required_features: wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES
+            | wgpu::Features::EXPERIMENTAL_RAY_QUERY,
+        experimental_features: unsafe { wgpu::ExperimentalFeatures::enabled() },
+        required_limits: wgpu::Limits {
+            max_blas_primitive_count: 1,
+            max_blas_geometry_count: 1,
+            max_tlas_instance_count: 1,
+            ..Default::default()
+        },
         ..Default::default()
     }))
     .unwrap();
 
     let mut surface_config = wgpu::SurfaceConfiguration {
-        present_mode: wgpu::PresentMode::Fifo,
+        present_mode: wgpu::PresentMode::Immediate,
         ..surface
             .get_default_config(
                 &adapter,
@@ -79,29 +89,75 @@ fn main() {
         &compute_texture_sampler,
     );
 
+    let blas = device.create_blas(
+        &wgpu::CreateBlasDescriptor {
+            label: None,
+            flags: wgpu::AccelerationStructureFlags::empty(),
+            update_mode: wgpu::AccelerationStructureUpdateMode::Build,
+        },
+        wgpu::BlasGeometrySizeDescriptors::Triangles {
+            descriptors: vec![wgpu::BlasTriangleGeometrySizeDescriptor {
+                vertex_format: wgpu::VertexFormat::Float32x3,
+                vertex_count: 1,
+                index_format: None,
+                index_count: None,
+                flags: wgpu::AccelerationStructureGeometryFlags::empty(),
+            }],
+        },
+    );
+
+    let tlas_instance = wgpu::TlasInstance::new(
+        &blas,
+        [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+        0,
+        0xff,
+    );
+
+    let mut tlas = device.create_tlas(&wgpu::CreateTlasDescriptor {
+        label: None,
+        max_instances: 1,
+        flags: wgpu::AccelerationStructureFlags::empty(),
+        update_mode: wgpu::AccelerationStructureUpdateMode::Build,
+    });
+
+    tlas[0] = Some(tlas_instance);
+
+    let mut last_frame = Instant::now();
+    let mut fps = 0;
+
     let window = &window;
     event_loop
         .run(move |event, active_loop| {
+            let now = Instant::now();
+            if now - last_frame > Duration::from_secs(1) {
+                window.set_title(&format!("raytracer - FPS: {fps}"));
+                fps = 0;
+                last_frame = now;
+            }
+
             let mut resize = false;
 
             if let winit::event::Event::WindowEvent { event, .. } = event {
                 match event {
                     winit::event::WindowEvent::CloseRequested => active_loop.exit(),
-                    winit::event::WindowEvent::RedrawRequested => match render(
-                        &device,
-                        &queue,
-                        &surface,
-                        &render_pipeline,
-                        &render_bind_group,
-                        &compute_pipeline,
-                        &compute_bind_group,
-                    ) {
-                        Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-                            resize = true
+                    winit::event::WindowEvent::RedrawRequested => {
+                        window.request_redraw();
+                        match render(
+                            &device,
+                            &queue,
+                            &surface,
+                            &render_pipeline,
+                            &render_bind_group,
+                            &compute_pipeline,
+                            &compute_bind_group,
+                        ) {
+                            Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+                                resize = true
+                            }
+                            Err(e) => log::error!("{e:?}"),
+                            Ok(()) => fps += 1,
                         }
-                        Err(e) => log::error!("{e:?}"),
-                        Ok(()) => {}
-                    },
+                    }
                     winit::event::WindowEvent::Resized(_) => {
                         resize = true;
                     }
