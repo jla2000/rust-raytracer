@@ -1,14 +1,20 @@
 #![expect(deprecated, reason = "New winit interface sucks")]
 
 fn main() {
-    use winit::platform::x11::EventLoopBuilderExtX11;
-
     env_logger::init();
 
+    #[cfg(target_os = "linux")]
+    use winit::platform::x11::EventLoopBuilderExtX11;
+
+    #[cfg(target_os = "linux")]
     let event_loop = winit::event_loop::EventLoop::builder()
         .with_x11()
         .build()
         .unwrap();
+
+    #[cfg(target_os = "windows")]
+    let event_loop = winit::event_loop::EventLoop::new().unwrap();
+
     let window = event_loop
         .create_window(winit::window::WindowAttributes::default())
         .unwrap();
@@ -59,44 +65,54 @@ fn main() {
 
     let window = &window;
     event_loop
-        .run(move |event, active_loop| if let winit::event::Event::WindowEvent { event, .. } = event { match event {
-            winit::event::WindowEvent::CloseRequested
-            | winit::event::WindowEvent::KeyboardInput {
-                event: winit::event::KeyEvent {
-                    physical_key: winit::keyboard::PhysicalKey::Code(winit::keyboard::KeyCode::Escape),
-                    ..
-                },
-                ..
-            } => active_loop.exit(),
-            winit::event::WindowEvent::RedrawRequested => match render(
-                &device,
-                &queue,
-                &surface,
-                &render_pipeline,
-                &compute_pipeline,
-                &compute_bind_group,
-            ) {
-                Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-                    surface_config.width = window.inner_size().width;
-                    surface_config.height = window.inner_size().height;
-                    surface.configure(&device, &surface_config);
+        .run(move |event, active_loop| {
+            let mut resize = false;
 
-                    compute_texture_view = create_compute_texture(
+            if let winit::event::Event::WindowEvent { event, .. } = event {
+                match event {
+                    winit::event::WindowEvent::CloseRequested => active_loop.exit(),
+                    winit::event::WindowEvent::RedrawRequested => match render(
                         &device,
-                        surface_config.width,
-                        surface_config.height,
-                    );
-                    compute_bind_group = create_compute_bind_group(
-                        &device,
-                        &compute_bind_group_layout,
-                        &compute_texture_view,
-                    );
+                        &queue,
+                        &surface,
+                        &render_pipeline,
+                        &compute_pipeline,
+                        &compute_bind_group,
+                    ) {
+                        Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+                            resize = true
+                        }
+                        Err(e) => log::error!("{e:?}"),
+                        Ok(()) => {}
+                    },
+                    winit::event::WindowEvent::Resized(size) => {
+                        if size.width.is_multiple_of(10) && size.height.is_multiple_of(10) {
+                            resize = true;
+                        } else {
+                            _ = window.request_inner_size(winit::dpi::PhysicalSize {
+                                width: size.width - size.width % 10,
+                                height: size.height - size.height % 10,
+                            });
+                        }
+                    }
+                    _ => {}
                 }
-                Err(e) => log::error!("{e:?}"),
-                Ok(()) => {}
-            },
-            _ => {}
-        } })
+            }
+
+            if resize {
+                surface_config.width = window.inner_size().width;
+                surface_config.height = window.inner_size().height;
+                surface.configure(&device, &surface_config);
+
+                compute_texture_view =
+                    create_compute_texture(&device, surface_config.width, surface_config.height);
+                compute_bind_group = create_compute_bind_group(
+                    &device,
+                    &compute_bind_group_layout,
+                    &compute_texture_view,
+                );
+            }
+        })
         .unwrap();
 }
 
@@ -144,7 +160,11 @@ fn render(
 
     compute_pass.set_bind_group(0, compute_bind_group, &[]);
     compute_pass.set_pipeline(compute_pipeline);
-    compute_pass.dispatch_workgroups(800, 600, 1);
+    compute_pass.dispatch_workgroups(
+        surface_view.texture().width() / 10,
+        surface_view.texture().height() / 10,
+        1,
+    );
     drop(compute_pass);
 
     let command_buffers = [render_encoder.finish(), compute_encoder.finish()];
