@@ -27,9 +27,13 @@
           ];
           LD_LIBRARY_PATH = with pkgs; lib.makeLibraryPath [
             wayland
+            xorg.libXi
+            xorg.libX11
+            xorg.libXcursor
             vulkan-loader
             libxkbcommon
           ];
+          VK_LAYER_PATH = "${pkgs.vulkan-validation-layers}/share/vulkan/explicit_layer.d";
         };
         windows = pkgs.pkgsCross.mingwW64.mkShell {
           nativeBuildInputs = with pkgs; [

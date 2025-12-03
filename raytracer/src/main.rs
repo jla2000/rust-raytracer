@@ -42,11 +42,12 @@ use winit::{
     event::{Event, KeyEvent, WindowEvent},
     event_loop::EventLoop,
     keyboard::{KeyCode, PhysicalKey},
+    platform::x11::EventLoopBuilderExtX11,
     window::WindowAttributes,
 };
 
 fn main() {
-    let event_loop = EventLoop::new().unwrap();
+    let event_loop = EventLoop::builder().with_x11().build().unwrap();
     let instance_extensions = Surface::required_extensions(&event_loop).unwrap();
 
     let library = VulkanLibrary::new().unwrap();
