@@ -33,6 +33,13 @@ pub fn main_cs(
     let output_size: UVec2 = output.query_size();
 
     if global_invocation_id.x < output_size.x && global_invocation_id.y < output_size.y {
-        unsafe { output.write(global_invocation_id.xy(), vec4(1.0, 0.0, 0.0, 1.0)) };
+        let color = if global_invocation_id.x.is_multiple_of(4)
+            && global_invocation_id.y.is_multiple_of(4)
+        {
+            vec4(1.0, 0.0, 0.0, 1.0)
+        } else {
+            vec4(0.0, 1.0, 0.0, 1.0)
+        };
+        unsafe { output.write(global_invocation_id.xy(), color) };
     }
 }
