@@ -1,63 +1,5 @@
 #![expect(deprecated, reason = "New winit interface sucks")]
 
-struct Backend<'a> {
-    surface: wgpu::Surface<'a>,
-    surface_config: wgpu::SurfaceConfiguration,
-    device: wgpu::Device,
-    queue: wgpu::Queue,
-}
-
-impl<'a> Backend<'a> {
-    async fn initialize(window: &'a winit::window::Window) -> Self {
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::VULKAN,
-            ..Default::default()
-        });
-
-        let surface = instance.create_surface(window).unwrap();
-
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                force_fallback_adapter: false,
-                compatible_surface: Some(&surface),
-            })
-            .await
-            .unwrap();
-
-        let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor {
-                required_features: wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES,
-                ..Default::default()
-            })
-            .await
-            .unwrap();
-
-        let surface_config = surface
-            .get_default_config(
-                &adapter,
-                window.inner_size().width,
-                window.inner_size().height,
-            )
-            .unwrap();
-
-        surface.configure(&device, &surface_config);
-
-        Self {
-            surface,
-            surface_config,
-            device,
-            queue,
-        }
-    }
-
-    fn handle_resize(&mut self, width: u32, height: u32) {
-        self.surface_config.width = width;
-        self.surface_config.height = height;
-        self.surface.configure(&self.device, &self.surface_config);
-    }
-}
-
 fn main() {
     use winit::platform::x11::EventLoopBuilderExtX11;
 
@@ -71,151 +13,97 @@ fn main() {
         .create_window(winit::window::WindowAttributes::default())
         .unwrap();
 
-    let mut backend = pollster::block_on(Backend::initialize(&window));
-
-    let spirv_shader = backend
-        .device
-        .create_shader_module(wgpu::ShaderModuleDescriptor {
-            source: wgpu::util::make_spirv(include_bytes!(env!("raytracer_gpu.spv"))),
-            label: None,
-        });
-
-    let render_pipeline = backend
-        .device
-        .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: None,
-            layout: None,
-            vertex: wgpu::VertexState {
-                module: &spirv_shader,
-                entry_point: Some("main_vs"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleStrip,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                unclipped_depth: false,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                conservative: false,
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &spirv_shader,
-                entry_point: Some("main_fs"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: backend.surface_config.format,
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            multiview: None,
-            cache: None,
-        });
-
-    let compute_texture = backend.device.create_texture(&wgpu::TextureDescriptor {
-        label: None,
-        size: wgpu::Extent3d {
-            width: 800,
-            height: 600,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8Snorm,
-        usage: wgpu::TextureUsages::STORAGE_BINDING,
-        view_formats: &[],
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        backends: wgpu::Backends::VULKAN,
+        ..Default::default()
     });
 
-    let compute_texture_view = compute_texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let surface = instance.create_surface(&window).unwrap();
 
-    let compute_bind_group_layout =
-        backend
-            .device
-            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: None,
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::StorageTexture {
-                        access: wgpu::StorageTextureAccess::ReadWrite,
-                        format: wgpu::TextureFormat::Rgba8Snorm,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                    },
-                    count: None,
-                }],
-            });
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::HighPerformance,
+        force_fallback_adapter: false,
+        compatible_surface: Some(&surface),
+    }))
+    .unwrap();
 
-    let compute_bind_group = backend
-        .device
-        .create_bind_group(&wgpu::BindGroupDescriptor {
-            label: None,
-            layout: &compute_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(&compute_texture_view),
-            }],
-        });
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        required_features: wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES,
+        ..Default::default()
+    }))
+    .unwrap();
 
-    let compute_pipeline_layout =
-        backend
-            .device
-            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: None,
-                bind_group_layouts: &[&compute_bind_group_layout],
-                push_constant_ranges: &[],
-            });
+    let mut surface_config = surface
+        .get_default_config(
+            &adapter,
+            window.inner_size().width,
+            window.inner_size().height,
+        )
+        .unwrap();
 
-    let compute_pipeline =
-        backend
-            .device
-            .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: None,
-                layout: Some(&compute_pipeline_layout),
-                module: &spirv_shader,
-                entry_point: Some("main_cs"),
-                compilation_options: Default::default(),
-                cache: None,
-            });
+    surface.configure(&device, &surface_config);
+
+    let mut compute_texture_view =
+        create_compute_texture(&device, surface_config.width, surface_config.height);
+    let compute_bind_group_layout = create_compute_bind_group_layout(&device);
+    let mut compute_bind_group =
+        create_compute_bind_group(&device, &compute_bind_group_layout, &compute_texture_view);
+
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        source: wgpu::util::make_spirv(include_bytes!(env!("raytracer_gpu.spv"))),
+        label: None,
+    });
+
+    let compute_pipeline = create_compute_pipeline(&device, &shader, &compute_bind_group_layout);
+    let render_pipeline = create_render_pipeline(&device, &shader, surface_config.format);
 
     let window = &window;
     event_loop
-        .run(move |event, active_loop| {
-            if let winit::event::Event::WindowEvent { event, .. } = event {
-                match event {
-                    winit::event::WindowEvent::CloseRequested => active_loop.exit(),
-                    winit::event::WindowEvent::RedrawRequested => {
-                        match render(
-                            &backend.surface,
-                            &backend.device,
-                            &backend.queue,
-                            &render_pipeline,
-                            &compute_pipeline,
-                            &compute_bind_group,
-                        ) {
-                            Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-                                let window_size = window.inner_size();
-                                backend.handle_resize(window_size.width, window_size.height);
-                            }
-                            Err(e) => log::error!("{e:?}"),
-                            Ok(()) => {}
-                        }
-                    }
-                    _ => {}
+        .run(move |event, active_loop| if let winit::event::Event::WindowEvent { event, .. } = event { match event {
+            winit::event::WindowEvent::CloseRequested
+            | winit::event::WindowEvent::KeyboardInput {
+                event: winit::event::KeyEvent {
+                    physical_key: winit::keyboard::PhysicalKey::Code(winit::keyboard::KeyCode::Escape),
+                    ..
+                },
+                ..
+            } => active_loop.exit(),
+            winit::event::WindowEvent::RedrawRequested => match render(
+                &device,
+                &queue,
+                &surface,
+                &render_pipeline,
+                &compute_pipeline,
+                &compute_bind_group,
+            ) {
+                Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+                    surface_config.width = window.inner_size().width;
+                    surface_config.height = window.inner_size().height;
+                    surface.configure(&device, &surface_config);
+
+                    compute_texture_view = create_compute_texture(
+                        &device,
+                        surface_config.width,
+                        surface_config.height,
+                    );
+                    compute_bind_group = create_compute_bind_group(
+                        &device,
+                        &compute_bind_group_layout,
+                        &compute_texture_view,
+                    );
                 }
-            }
-        })
+                Err(e) => log::error!("{e:?}"),
+                Ok(()) => {}
+            },
+            _ => {}
+        } })
         .unwrap();
 }
 
 fn render(
-    surface: &wgpu::Surface,
     device: &wgpu::Device,
     queue: &wgpu::Queue,
+    surface: &wgpu::Surface,
     render_pipeline: &wgpu::RenderPipeline,
     compute_pipeline: &wgpu::ComputePipeline,
     compute_bind_group: &wgpu::BindGroup,
@@ -227,6 +115,7 @@ fn render(
 
     let mut render_encoder =
         device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+
     let mut render_pass = render_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: None,
         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -242,12 +131,14 @@ fn render(
         occlusion_query_set: None,
         timestamp_writes: None,
     });
+
     render_pass.set_pipeline(render_pipeline);
     render_pass.draw(0..4, 0..1);
     drop(render_pass);
 
     let mut compute_encoder =
         device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+
     let mut compute_pass =
         compute_encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
 
@@ -262,4 +153,114 @@ fn render(
     surface_texture.present();
 
     Ok(())
+}
+
+fn create_compute_texture(device: &wgpu::Device, width: u32, height: u32) -> wgpu::TextureView {
+    let compute_texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: None,
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Snorm,
+        usage: wgpu::TextureUsages::STORAGE_BINDING,
+        view_formats: &[],
+    });
+
+    compute_texture.create_view(&wgpu::TextureViewDescriptor::default())
+}
+
+fn create_render_pipeline(
+    device: &wgpu::Device,
+    shader: &wgpu::ShaderModule,
+    surface_format: wgpu::TextureFormat,
+) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: None,
+        layout: None,
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("main_vs"),
+            compilation_options: Default::default(),
+            buffers: &[],
+        },
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleStrip,
+            strip_index_format: None,
+            front_face: wgpu::FrontFace::Ccw,
+            cull_mode: None,
+            unclipped_depth: false,
+            polygon_mode: wgpu::PolygonMode::Fill,
+            conservative: false,
+        },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some("main_fs"),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: surface_format,
+                blend: Some(wgpu::BlendState::REPLACE),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        multiview: None,
+        cache: None,
+    })
+}
+
+fn create_compute_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: None,
+        entries: &[wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::StorageTexture {
+                access: wgpu::StorageTextureAccess::ReadWrite,
+                format: wgpu::TextureFormat::Rgba8Snorm,
+                view_dimension: wgpu::TextureViewDimension::D2,
+            },
+            count: None,
+        }],
+    })
+}
+fn create_compute_bind_group(
+    device: &wgpu::Device,
+    bind_group_layout: &wgpu::BindGroupLayout,
+    compute_texture_view: &wgpu::TextureView,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: None,
+        layout: bind_group_layout,
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: wgpu::BindingResource::TextureView(compute_texture_view),
+        }],
+    })
+}
+
+fn create_compute_pipeline(
+    device: &wgpu::Device,
+    shader: &wgpu::ShaderModule,
+    bind_group_layout: &wgpu::BindGroupLayout,
+) -> wgpu::ComputePipeline {
+    let compute_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: None,
+        bind_group_layouts: &[bind_group_layout],
+        push_constant_ranges: &[],
+    });
+
+    device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: None,
+        layout: Some(&compute_pipeline_layout),
+        module: shader,
+        entry_point: Some("main_cs"),
+        compilation_options: Default::default(),
+        cache: None,
+    })
 }
