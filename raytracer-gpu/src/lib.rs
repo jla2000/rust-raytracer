@@ -24,7 +24,7 @@ pub fn main_cs(
     #[spirv(global_invocation_id)] global_invocation_id: UVec3,
     #[spirv(descriptor_set = 0, binding = 0)] output: &Image!(
         2D,
-        format = rgba32f,
+        format = rgba8_snorm,
         sampled = false
     ),
 ) {
