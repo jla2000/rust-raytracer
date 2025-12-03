@@ -1,12 +1,17 @@
 #![expect(deprecated, reason = "New winit interface sucks")]
 
+use winit::platform::x11::EventLoopBuilderExtX11;
+
 async fn run() {
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
         backends: wgpu::Backends::VULKAN,
         ..Default::default()
     });
 
-    let event_loop = winit::event_loop::EventLoop::new().unwrap();
+    let event_loop = winit::event_loop::EventLoop::builder()
+        .with_x11()
+        .build()
+        .unwrap();
     let window = event_loop
         .create_window(winit::window::WindowAttributes::default())
         .unwrap();

@@ -28,6 +28,9 @@
           LD_LIBRARY_PATH = with pkgs; lib.makeLibraryPath [
             vulkan-loader
             libxkbcommon
+            xorg.libXi
+            xorg.libX11
+            xorg.libXcursor
           ];
         };
         windows = pkgs.pkgsCross.mingwW64.mkShell {
