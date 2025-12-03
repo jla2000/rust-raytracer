@@ -2,7 +2,7 @@
 
 use std::time::{Duration, Instant};
 
-use wgpu::BlasGeometrySizeDescriptors;
+use wgpu::{BlasGeometrySizeDescriptors, util::DeviceExt};
 
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().filter_or("RUST_LOG", "error")).init();
@@ -89,6 +89,21 @@ fn main() {
         &compute_texture_sampler,
     );
 
+    const VERTICES: &[f32] = &[0.0, 0.5, 0.0, -0.5, -0.5, 0.0, 0.5, -0.5, 0.0];
+
+    let blas_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: None,
+        contents: bytemuck::cast_slice(&VERTICES),
+        usage: wgpu::BufferUsages::BLAS_INPUT,
+    });
+
+    let blas_size_descriptor = wgpu::BlasTriangleGeometrySizeDescriptor {
+        vertex_format: wgpu::VertexFormat::Float32x3,
+        vertex_count: 1,
+        index_format: None,
+        index_count: None,
+        flags: wgpu::AccelerationStructureGeometryFlags::empty(),
+    };
     let blas = device.create_blas(
         &wgpu::CreateBlasDescriptor {
             label: None,
@@ -96,13 +111,7 @@ fn main() {
             update_mode: wgpu::AccelerationStructureUpdateMode::Build,
         },
         wgpu::BlasGeometrySizeDescriptors::Triangles {
-            descriptors: vec![wgpu::BlasTriangleGeometrySizeDescriptor {
-                vertex_format: wgpu::VertexFormat::Float32x3,
-                vertex_count: 1,
-                index_format: None,
-                index_count: None,
-                flags: wgpu::AccelerationStructureGeometryFlags::empty(),
-            }],
+            descriptors: vec![blas_size_descriptor.clone()],
         },
     );
 
@@ -121,6 +130,25 @@ fn main() {
     });
 
     tlas[0] = Some(tlas_instance);
+
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    encoder.build_acceleration_structures(
+        std::iter::once(&wgpu::BlasBuildEntry {
+            blas: &blas,
+            geometry: wgpu::BlasGeometries::TriangleGeometries(vec![wgpu::BlasTriangleGeometry {
+                size: &blas_size_descriptor,
+                vertex_buffer: &blas_vertex_buffer,
+                first_vertex: 0,
+                vertex_stride: 12,
+                index_buffer: None,
+                first_index: None,
+                transform_buffer: None,
+                transform_buffer_offset: None,
+            }]),
+        }),
+        std::iter::once(&tlas),
+    );
+    queue.submit(std::iter::once(encoder.finish()));
 
     let mut last_frame = Instant::now();
     let mut fps = 0;

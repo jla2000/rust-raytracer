@@ -8,6 +8,7 @@ log.workspace = true
 wgpu.workspace = true
 winit.workspace = true
 pollster.workspace = true
+bytemuck.workspace = true
 env_logger.workspace = true
 
 [build-dependencies]
