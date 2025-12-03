@@ -32,6 +32,7 @@
             xorg.libX11
             xorg.libXcursor
           ];
+          VK_LAYER_PATH = "${pkgs.vulkan-validation-layers}/share/vulkan/explicit_layer.d";
         };
         windows = pkgs.pkgsCross.mingwW64.mkShell {
           nativeBuildInputs = with pkgs; [

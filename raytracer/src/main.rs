@@ -1,7 +1,7 @@
 #![expect(deprecated, reason = "New winit interface sucks")]
 
 fn main() {
-    env_logger::init();
+    env_logger::Builder::from_env(env_logger::Env::default().filter_or("RUST_LOG", "error")).init();
 
     #[cfg(target_os = "linux")]
     use winit::platform::x11::EventLoopBuilderExtX11;
@@ -15,12 +15,14 @@ fn main() {
     #[cfg(target_os = "windows")]
     let event_loop = winit::event_loop::EventLoop::new().unwrap();
 
+    event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
+
     let window = event_loop
         .create_window(winit::window::WindowAttributes::default())
         .unwrap();
 
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-        backends: wgpu::Backends::VULKAN,
+        backends: wgpu::Backends::PRIMARY,
         ..Default::default()
     });
 
@@ -39,13 +41,16 @@ fn main() {
     }))
     .unwrap();
 
-    let mut surface_config = surface
-        .get_default_config(
-            &adapter,
-            window.inner_size().width,
-            window.inner_size().height,
-        )
-        .unwrap();
+    let mut surface_config = wgpu::SurfaceConfiguration {
+        present_mode: wgpu::PresentMode::Fifo,
+        ..surface
+            .get_default_config(
+                &adapter,
+                window.inner_size().width,
+                window.inner_size().height,
+            )
+            .unwrap()
+    };
 
     surface.configure(&device, &surface_config);
 
@@ -97,16 +102,8 @@ fn main() {
                         Err(e) => log::error!("{e:?}"),
                         Ok(()) => {}
                     },
-                    winit::event::WindowEvent::Resized(size) => {
+                    winit::event::WindowEvent::Resized(_) => {
                         resize = true;
-                        if size.width.is_multiple_of(10) && size.height.is_multiple_of(10) {
-                            resize = true;
-                        } else {
-                            _ = window.request_inner_size(winit::dpi::PhysicalSize {
-                                width: size.width - size.width % 10,
-                                height: size.height - size.height % 10,
-                            });
-                        }
                     }
                     _ => {}
                 }
