@@ -2,22 +2,18 @@
 
 use std::time::{Duration, Instant};
 
-use wgpu::{BlasGeometrySizeDescriptors, util::DeviceExt};
-
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().filter_or("RUST_LOG", "error")).init();
 
-    #[cfg(target_os = "linux")]
-    use winit::platform::x11::EventLoopBuilderExtX11;
-
-    #[cfg(target_os = "linux")]
-    let event_loop = winit::event_loop::EventLoop::builder()
-        .with_x11()
-        .build()
-        .unwrap();
-
-    #[cfg(target_os = "windows")]
-    let event_loop = winit::event_loop::EventLoop::new().unwrap();
+    let event_loop = {
+        let mut event_loop_builder = winit::event_loop::EventLoop::builder();
+        #[cfg(target_os = "linux")]
+        {
+            use winit::platform::x11::EventLoopBuilderExtX11;
+            event_loop_builder.with_x11();
+        }
+        event_loop_builder.build().unwrap()
+    };
 
     let window = event_loop
         .create_window(winit::window::WindowAttributes::default())
@@ -38,15 +34,7 @@ fn main() {
     .unwrap();
 
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        required_features: wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES
-            | wgpu::Features::EXPERIMENTAL_RAY_QUERY,
-        experimental_features: unsafe { wgpu::ExperimentalFeatures::enabled() },
-        required_limits: wgpu::Limits {
-            max_blas_primitive_count: 1,
-            max_blas_geometry_count: 1,
-            max_tlas_instance_count: 1,
-            ..Default::default()
-        },
+        required_features: wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES,
         ..Default::default()
     }))
     .unwrap();
@@ -88,67 +76,6 @@ fn main() {
         &compute_texture_view,
         &compute_texture_sampler,
     );
-
-    const VERTICES: &[f32] = &[0.0, 0.5, 0.0, -0.5, -0.5, 0.0, 0.5, -0.5, 0.0];
-
-    let blas_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: None,
-        contents: bytemuck::cast_slice(&VERTICES),
-        usage: wgpu::BufferUsages::BLAS_INPUT,
-    });
-
-    let blas_size_descriptor = wgpu::BlasTriangleGeometrySizeDescriptor {
-        vertex_format: wgpu::VertexFormat::Float32x3,
-        vertex_count: 1,
-        index_format: None,
-        index_count: None,
-        flags: wgpu::AccelerationStructureGeometryFlags::empty(),
-    };
-    let blas = device.create_blas(
-        &wgpu::CreateBlasDescriptor {
-            label: None,
-            flags: wgpu::AccelerationStructureFlags::empty(),
-            update_mode: wgpu::AccelerationStructureUpdateMode::Build,
-        },
-        wgpu::BlasGeometrySizeDescriptors::Triangles {
-            descriptors: vec![blas_size_descriptor.clone()],
-        },
-    );
-
-    let tlas_instance = wgpu::TlasInstance::new(
-        &blas,
-        [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
-        0,
-        0xff,
-    );
-
-    let mut tlas = device.create_tlas(&wgpu::CreateTlasDescriptor {
-        label: None,
-        max_instances: 1,
-        flags: wgpu::AccelerationStructureFlags::empty(),
-        update_mode: wgpu::AccelerationStructureUpdateMode::Build,
-    });
-
-    tlas[0] = Some(tlas_instance);
-
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-    encoder.build_acceleration_structures(
-        std::iter::once(&wgpu::BlasBuildEntry {
-            blas: &blas,
-            geometry: wgpu::BlasGeometries::TriangleGeometries(vec![wgpu::BlasTriangleGeometry {
-                size: &blas_size_descriptor,
-                vertex_buffer: &blas_vertex_buffer,
-                first_vertex: 0,
-                vertex_stride: 12,
-                index_buffer: None,
-                first_index: None,
-                transform_buffer: None,
-                transform_buffer_offset: None,
-            }]),
-        }),
-        std::iter::once(&tlas),
-    );
-    queue.submit(std::iter::once(encoder.finish()));
 
     let mut last_frame = Instant::now();
     let mut fps = 0;
